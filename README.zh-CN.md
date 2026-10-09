@@ -2,7 +2,8 @@
 
 用一张角色参考图生成可循环的像素风走路动画：动画交给
 [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3)，像素质感交给一条
-确定性的后处理链。
+确定性的后处理链。同一条链也能把一段转圈视频变成
+[N 方向精灵](#用例二一段转圈视频--n-方向精灵)（船、载具、道具）。
 
 [English](README.md)
 
@@ -52,6 +53,7 @@ pip install numpy pillow
 
 # 只跑后处理，用合成帧，不需要任何权重
 python tests/smoke.py
+python tests/smoke_spin.py   # 转圈用例
 ```
 
 配好 ComfyUI 和 H3 权重之后跑完整流程：
@@ -206,6 +208,38 @@ hard  Every shape has a bold solid black outline. All colours are flat
 
 ---
 
+## 用例二：一段转圈视频 → N 方向精灵
+
+让 H3 把物体原地转一整圈，再按需要的朝向挑帧——同一段视频，造型和配色天然一致。
+
+<p align="center">
+  <img src="examples/ship_reference_sheet.png" height="180" alt="四视图">
+  &nbsp;➜&nbsp;
+  <img src="examples/ship_spin.gif" height="180" alt="32 方向">
+</p>
+
+![32 个朝向，0° = 船头朝右，顺时针](examples/ship_spin_sheet.png)
+
+```bash
+python src/generate_h3.py --ref <四视图.png> --frames 158 --spin "small wooden sailing ship"
+python src/pick_rotation.py data/trainset/h3/<生成目录> -n 32 --hue 15,50
+python src/quant_sprite.py data/trainset/h3/<生成目录>_rot32 --ref <四视图.png> \
+       --lock-ref --colors 24 --scale <脚本打印的 s> --outline --outline-color 0,0,0 --alpha
+```
+
+- **参考图用 2×2 四视图**（朝右 / 朝观者 / 朝左 / 背向），由生图模型一次画在一张图里。
+  只给侧面的话，看不到的几面全靠模型编。
+- **158 帧。** H3 开头会原地晃 20~36 帧，124 帧实测只转到约 300°。
+- **用水平宽度量朝向，不用主轴角。** 宽度与镜头俯角无关：侧面最宽、正对最窄，
+  极值处取锚点 = 0/90/180/270°，中间用 `acos` 插值。`--hue` 只量船体，
+  避免帆和桅杆干扰。转向看第一象限主轴倾斜的正负号。
+- **帧按数字排序**（`f100` 不在 `f10` 和 `f11` 之间）；第一个锚点之前的帧是开头的晃动，不参与挑选。
+
+船的实测：转了 366.7°，32 个朝向最大挑帧误差 1.3°，17 色。
+已知差异：正对镜头时 H3 把帆画成一条线（侧对镜头），而手绘美术通常让帆朝向观者。
+
+---
+
 ## 尚未解决
 
 **像素漂移。** 相邻两帧都属于角色的位置上，约 63% 的像素颜色会变。
@@ -218,7 +252,8 @@ hard  Every shape has a bold solid black outline. All colours are flat
 它的边缘在进模型之前就有约 2 像素过渡，出来变成约 4 像素。
 "先把参考图清干净再喂给模型"这条路还没试。
 
-**只有一个朝向。** 侧面。正面、背面、斜向都需要各自的参考图，尚未尝试。
+**走路循环只有一个朝向。** 侧面。正面、背面、斜向都需要各自的参考图，尚未尝试。
+（刚体物体的多朝向见上面的用例二；角色边走边转向还没覆盖。）
 
 ---
 
@@ -227,11 +262,14 @@ hard  Every shape has a bold solid black outline. All colours are flat
 ```
 src/generate_h3.py    H3 Ref2VA 的 ComfyUI API 客户端
 src/pick_cycle.py     按步态相位抽周期
+src/pick_rotation.py  按宽度量朝向，抽 N 方向精灵
 src/quant_sprite.py   去键、量化、降采样、描边、透明底
 src/quantize.py       OKLab 调色板与降采样原语
 src/edge_check.py     边缘锐利度诊断
 tests/fixture.py      带视频模型伪影的合成走路片段
 tests/smoke.py        跑一遍后处理链并打数值
+tests/fixture_spin.py 带真实朝向的合成转圈片段
+tests/smoke_spin.py   转圈链路，用真值检查
 assets/side_bear.png  示例参考图
 ```
 

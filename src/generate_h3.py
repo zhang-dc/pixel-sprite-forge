@@ -99,17 +99,59 @@ EDGE_TXT = {
 }
 
 
-def walk_prompt(steps: int) -> str:
+# 视角档。参考图必须跟着换 —— H3 靠参考图保持身份，用侧面参考图去要
+# 正面动画，模型只能自己编一个正面，多半不像。
+#
+# 抽帧器（pick_cycle）用**下半身水平展宽**当步态相位：侧面走路时两腿
+# 前后分开，展宽振荡明显；正面/背面走路两腿是左右交替、前后位移在画面上
+# 被压缩，展宽振荡会弱很多。所以正背面的抽帧可能需要换相位判据，
+# 这一点尚未验证。
+VIEWS = {
+    "side": ("side view, full body, seen from the side",
+             "walking in place, the character stays centred and does not "
+             "move across the frame"),
+    "front": ("front view, facing the camera, full body",
+              "walking towards the camera on the spot, the character stays "
+              "centred and does not get closer or further away"),
+    "back": ("back view, seen from behind, full body",
+             "walking away from the camera on the spot, the character stays "
+             "centred and does not get closer or further away"),
+    "quarter": ("three-quarter view, turned 45 degrees away from the camera, "
+                "full body",
+                "walking forward on the spot, the character stays centred "
+                "and does not move across the frame"),
+}
+
+
+def walk_prompt(steps: int, view: str = "side") -> str:
+    angle, motion = VIEWS.get(view, VIEWS["side"])
     return (
-        f"The pixel art game character in <Picture 1> walking in place, "
-        f"side view, full body, seen from the side. "
+        f"The pixel art game character in <Picture 1> {motion}, {angle}. "
         f"Keep the exact same character design, colours and pixel art "
         f"style as <Picture 1>. "
         f"The character takes {steps} full steps during this clip, "
         f"alternating left foot and right foot, lifting each knee high "
         f"and swinging the legs wide apart between steps. "
-        f"Flat solid magenta background, static camera, "
-        f"the character stays centred and does not move across the frame."
+        f"Flat solid magenta background, static camera."
+    )
+
+
+# 原地转一整圈（下游 pick_rotation.py）。--ref 给 2×2 四视图拼图；
+# 朝向顺序逐个写出来，转向才稳定是顺时针。
+def spin_prompt(subject: str) -> str:
+    order = ("first the front points to the right, then the front turns "
+             "toward the viewer, then the front points to the left, then "
+             "the front points away from the viewer, and finally the front "
+             "points to the right again")
+    return (
+        f"<Picture 1> is a reference sheet showing one {subject} from four "
+        f"sides: front right, front toward the viewer, front left, front "
+        f"away from the viewer. The video shows only one single {subject}, "
+        f"alone in the center, seen by a fixed high three-quarter camera. "
+        f"It turns in place clockwise as seen from above through one full "
+        f"circle: {order}. Steady even rotation speed. It looks exactly "
+        f"like the one in <Picture 1> from every side and keeps the same "
+        f"size. The camera does not move. Flat solid magenta background."
     )
 
 
@@ -246,6 +288,12 @@ def main():
     # 动作覆盖量的旋钮：同样帧数里走几步
     ap.add_argument("--walk", type=int, default=0,
                     help="要求角色在这段里走几步（0 = 用默认提示词）")
+    ap.add_argument("--view", default="side", choices=sorted(VIEWS),
+                    help="视角。参考图要跟着换成对应朝向那张")
+    # 整圈要 158 帧：开头约 20~36 帧是原地晃，124 帧实测只转到 ~300°
+    ap.add_argument("--spin", default="",
+                    help="原地转一圈，填主体描述，如 'small wooden sailing "
+                         "ship'；--ref 给四视图拼图。建议 --frames 158")
     ap.add_argument("--edge", default="none", choices=sorted(EDGE_TXT),
                     help="描边/锐利度档，见 EDGE_TXT")
     ap.add_argument("--tag", default="h3")
@@ -270,14 +318,18 @@ def main():
     if n != args.frames:
         print(f"⚠️ 帧数 {args.frames} 不在 17k+5 网格上，顶到 {n}")
 
-    prompt = args.prompt or (walk_prompt(args.walk) if args.walk else PROMPT)
+    prompt = args.prompt or (spin_prompt(args.spin) if args.spin else
+                             walk_prompt(args.walk, args.view)
+                             if args.walk else PROMPT)
     prompt += EDGE_TXT[args.edge]
     # ⚠️ 走几步必须进目录名，否则不同配置写进同一个目录互相覆盖
     tag = (f"{args.tag}_{'gguf' if args.gguf else 'fp8'}"
            f"_{args.width}x{args.height}_n{n}_s{args.steps}"
            f"_sh{args.shift:g}_seed{args.seed}"
            + (f"_w{args.walk}" if args.walk else "")
-           + (f"_e{args.edge}" if args.edge != "none" else ""))
+           + (f"_e{args.edge}" if args.edge != "none" else "")
+           + (f"_{args.view}" if args.view != "side" else "")
+           + ("_spin" if args.spin else ""))
     d = OUT / tag
     d.mkdir(parents=True, exist_ok=True)
 

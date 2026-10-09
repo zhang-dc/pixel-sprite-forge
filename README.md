@@ -3,6 +3,9 @@
 Turn a single character reference image into a clean, loopable pixel-art walk
 cycle — using [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) for the
 animation and a deterministic post-processing chain for the pixel-art look.
+The same chain also turns one rotation clip into
+[N-direction sprites](#use-case-2-n-direction-sprites-from-one-rotation)
+for ships, vehicles and props.
 
 [简体中文](README.zh-CN.md)
 
@@ -53,6 +56,7 @@ pip install numpy pillow
 
 # post-processing only, on synthetic frames (no weights required)
 python tests/smoke.py
+python tests/smoke_spin.py   # rotation use case
 ```
 
 Full pipeline, once ComfyUI and the H3 weights are in place:
@@ -224,6 +228,44 @@ another form; alpha is thresholded to 0 or 255.
 
 ---
 
+## Use case 2: N-direction sprites from one rotation
+
+Have H3 turn an object in place through a full circle, then pick the frames at
+the headings you need — one clip, so shape and colours stay consistent.
+
+<p align="center">
+  <img src="examples/ship_reference_sheet.png" height="180" alt="four-view sheet">
+  &nbsp;➜&nbsp;
+  <img src="examples/ship_spin.gif" height="180" alt="32-direction ring">
+</p>
+
+![32 headings, 0° = bow right, clockwise](examples/ship_spin_sheet.png)
+
+```bash
+python src/generate_h3.py --ref <four-view-sheet.png> --frames 158 --spin "small wooden sailing ship"
+python src/pick_rotation.py data/trainset/h3/<run-dir> -n 32 --hue 15,50
+python src/quant_sprite.py data/trainset/h3/<run-dir>_rot32 --ref <four-view-sheet.png> \
+       --lock-ref --colors 24 --scale <printed s> --outline --outline-color 0,0,0 --alpha
+```
+
+- **Reference = a 2×2 four-view sheet** (right / toward viewer / left / away),
+  made by an image model in one image. With only a side view the model invents
+  the unseen sides.
+- **158 frames.** H3 wobbles for the first 20–36 frames; 124 frames only reached ~300°.
+- **Heading from horizontal width, not axis angle.** Width is independent of
+  camera elevation: widest side-on, narrowest head-on. Anchors at the extremes
+  give 0/90/180/270°, `acos` interpolates between. `--hue` restricts it to the
+  body so sails and masts don't distort it. Direction comes from the sign of
+  the axis tilt in the first quarter.
+- **Sort frames numerically** (`f100` is not between `f10` and `f11`), and
+  never pick frames before the first anchor — they are the wobble.
+
+Ship result: turned 366.7°, max pick error 1.3° over 32 headings, 17 colours.
+Known gap: head-on, H3 keeps the sails edge-on (a thin line), unlike
+hand-drawn art that faces them toward the viewer.
+
+---
+
 ## What is not solved
 
 **Pixel drift.** Between adjacent frames, ~63 % of pixels that are foreground in
@@ -238,8 +280,10 @@ colours, i.e. nearly one in five pixels has a unique colour. Its edges already
 span ~2 px before generation and ~4 px after. Cleaning the reference before
 feeding it to the model is an untested idea.
 
-**One direction only.** Side view. Front, back and diagonals need their own
-reference images and have not been attempted.
+**Walk cycles: one direction only.** Side view. Front, back and diagonals need
+their own reference images and have not been attempted. (Rigid objects are
+covered by the rotation use case above; a walking character turning while it
+walks is not.)
 
 ---
 
@@ -248,11 +292,14 @@ reference images and have not been attempted.
 ```
 src/generate_h3.py    ComfyUI API client for H3 Ref2VA
 src/pick_cycle.py     gait-phase cycle extraction
+src/pick_rotation.py  heading-from-width extraction for N-direction sprites
 src/quant_sprite.py   dekey, quantise, downsample, outline, alpha
 src/quantize.py       OKLab palette + downsampling primitives
 src/edge_check.py     edge sharpness diagnostics
 tests/fixture.py      synthetic walk clip with video-model artefacts
 tests/smoke.py        runs the post-processing chain, prints metrics
+tests/fixture_spin.py synthetic turn-in-place clip with ground-truth headings
+tests/smoke_spin.py   rotation chain, checked against ground truth
 assets/side_bear.png  example reference
 ```
 
